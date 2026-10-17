@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Face Runner</title>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+  }
+}
+</script>
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { overflow: hidden; background: #0b1020; font-family: system-ui, -apple-system, sans-serif; height: 100%; }
+
+  #game-container { position: fixed; inset: 0; }
+
+  /* ---- Превью камеры ---- */
+  #camera-preview {
+    position: fixed; top: 12px; right: 12px;
+    width: 168px; height: 126px;
+    border-radius: 14px; overflow: hidden;
+    border: 2px solid rgba(255,255,255,0.55);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+    z-index: 100; background: #111;
+    transition: border-color 0.15s ease;
+  }
+  #camera-preview.active { border-color: #34d399; }
+  #camera-preview.gesture { border-color: #fbbf24; }
+  #input-video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
+  #face-status {
+    position: absolute; bottom: 6px; left: 8px;
+    font-size: 11px; color: #fff;
+    background: rgba(0,0,0,0.55);
+    padding: 2px 7px; border-radius: 8px; font-weight: 600;
+  }
+
+  /* ---- HUD ---- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 50; padding: 16px; }
+  .hud-panel {
+    position: absolute;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(6px);
+    color: #fff; padding: 10px 16px; border-radius: 12px;
+    font-weight: 800; font-size: 20px;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+  }
+  #score { top: 16px; left: 16px; }
+  #high-score { top: 16px; left: 50%; transform: translateX(-50%); font-size: 14px; opacity: 0.9; }
+
+  /* ---- Кнопка паузы ---- */
+  #pause-btn {
+    position: fixed; bottom: 20px; left: 20px;
+    width: 54px; height: 54px; border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    border: 2px solid rgba(255,255,255,0.55);
+    color: #fff; font-size: 22px; cursor: pointer;
+    z-index: 60;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.1s ease;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  #pause-btn:active { transform: scale(0.94); }
+  #pause-btn.hidden { display: none; }
+
+  /* ---- Оверлеи ---- */
+  .overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(6, 10, 24, 0.85);
+    backdrop-filter: blur(8px);
+    z-index: 200; padding: 20px; text-align: center; color: #fff;
+    overflow-y: auto;
+  }
+  #settings-screen { z-index: 250; }
+  .overlay.hidden { display: none; }
+  .overlay-card {
+    max-width: 460px; width: 100%;
+    background: linear-gradient(160deg, #1a2a4a, #0f1730);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 20px; padding: 28px 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    max-height: 92vh; overflow-y: auto;
+    margin: auto;
+  }
+  .overlay-card h1 {
+    font-size: 32px; margin-bottom: 6px;
+    background: linear-gradient(90deg, #ff6b35, #fbbf24);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    font-weight: 900; letter-spacing: 1px;
+  }
+  .overlay-card h2 { font-size: 22px; margin-bottom: 14px; color: #fbbf24; }
+  .overlay-card p { opacity: 0.85; margin-bottom: 10px; line-height: 1.5; font-size: 15px; }
+  .gesture-list { text-align: left; display: inline-block; margin: 12px 0 20px; font-size: 15px; line-height: 1.9; }
+  .gesture-list b { color: #34d399; }
+
+  .btn {
+    pointer-events: auto;
+    background: linear-gradient(90deg, #ff6b35, #f97316);
+    color: #fff; border: none; border-radius: 12px;
+    padding: 14px 32px; font-size: 18px; font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(255, 107, 53, 0.4);
+    transition: transform 0.1s ease;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn:disabled { opacity: 0.5; cursor: wait; }
+  .btn-secondary {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.35);
+    box-shadow: none;
+  }
+  .btn-menu {
+    background: linear-gradient(90deg, #3b82f6, #2563eb);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+  }
+
+  .error-text { color: #f87171; font-size: 14px; margin-top: 12px; }
+
+  /* ---- Настройки ---- */
+  .settings-hint { font-size: 13px; opacity: 0.75; margin-bottom: 18px; line-height: 1.5; }
+  .setting-row { margin-bottom: 20px; text-align: left; }
+  .setting-row label {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 15px; font-weight: 600; margin-bottom: 8px;
+  }
+  .sens-val {
+    background: rgba(255,255,255,0.15);
+    padding: 2px 12px; border-radius: 8px; font-size: 14px;
+    min-width: 44px; text-align: center; font-variant-numeric: tabular-nums;
+  }
+  .setting-row input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 6px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 3px; outline: none; cursor: pointer;
+  }
+  .setting-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: linear-gradient(135deg, #ff6b35, #f97316);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(255,107,53,0.5);
+    border: 2px solid #fff;
+  }
+  .setting-row input[type="range"]::-moz-range-thumb {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: linear-gradient(135deg, #ff6b35, #f97316);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(255,107,53,0.5);
+    border: 2px solid #fff;
+  }
+  .live-bar {
+    position: relative; height: 10px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 5px; margin-top: 10px; overflow: visible;
+  }
+  .live-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: linear-gradient(90deg, #34d399, #60a5fa);
+    border-radius: 5px;
+    transition: width 0.05s linear, background 0.1s ease;
+  }
+  .live-fill.triggered {
+    background: linear-gradient(90deg, #fbbf24, #ef4444);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+  }
+  .threshold-marker {
+    position: absolute; top: -3px; bottom: -3px;
+    width: 2px; background: #fff; border-radius: 1px;
+    box-shadow: 0 0 6px rgba(255,255,255,0.9);
+    transform: translateX(-1px);
+    transition: left 0.1s ease;
+  }
+
+  @media (max-width: 640px) {
+    #camera-preview { width: 112px; height: 84px; top: 8px; right: 8px; }
+    .hud-panel { font-size: 16px; padding: 8px 12px; }
+    #score { top: 8px; left: 8px; }
+    #high-score { top: 8px; font-size: 12px; }
+    .overlay-card h1 { font-size: 26px; }
+    .btn { padding: 12px 24px; font-size: 16px; }
+    .overlay-card { padding: 22px 18px; }
+    #pause-btn { width: 48px; height: 48px; font-size: 20px; bottom: 14px; left: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<div id="camera-preview">
+  <video id="input-video" autoplay playsinline muted></video>
+  <div id="face-status">камера</div>
+</div>
+
+<div id="hud">
+  <div class="hud-panel" id="score">0</div>
+  <div class="hud-panel" id="high-score">Рекорд: 0</div>
+</div>
+
+<button id="pause-btn" class="hidden" title="Пауза (Esc)">⏸</button>
+
+<!-- Старт -->
+<div class="overlay" id="start-screen">
+  <div class="overlay-card">
+    <h1>FACE RUNNER</h1>
+    <p>Бесконечный раннер с управлением мимикой. Побежишь?</p>
+    <div class="gesture-list">
+      <div>👁 <b>Моргни левым глазом</b> — влево</div>
+      <div>👁 <b>Моргни правым глазом</b> — вправо</div>
+      <div>😛 <b>Покажи язык</b> — прыжок</div>
+    </div>
+    <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+      <button class="btn" id="start-btn">Начать</button>
+      <button class="btn btn-secondary" id="settings-btn">⚙ Настройки</button>
+    </div>
+    <div class="error-text" id="start-error"></div>
+  </div>
+</div>
+
+<!-- Пауза -->
+<div class="overlay hidden" id="pause-screen">
+  <div class="overlay-card">
+    <h2>⏸ Пауза</h2>
+    <p style="font-size: 20px; color: #fff; margin: 10px 0 18px;">
+      Счёт: <b id="pause-score">0</b>
+    </p>
+    <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+      <button class="btn" id="pause-resume">Продолжить</button>
+      <button class="btn btn-secondary" id="pause-settings">⚙ Настройки</button>
+      <button class="btn btn-secondary" id="pause-menu">Главное меню</button>
+    </div>
+  </div>
+</div>
+
+<!-- Настройки -->
+<div class="overlay hidden" id="settings-screen">
+  <div class="overlay-card" style="max-width: 520px;">
+    <h2>⚙ Чувствительность</h2>
+    <p class="settings-hint">
+      Двигайте ползунок вправо, если жест срабатывает редко.<br>
+      Белая линия — порог срабатывания. Когда цветная полоса проходит за неё — жест засчитывается (бар краснеет).
+      Для прыжка рот должен быть широко открыт.
+    </p>
+
+    <div class="setting-row">
+      <label>👁 Левый глаз <span class="sens-val" id="eye-left-val">50</span></label>
+      <input type="range" id="eye-left" min="0" max="100" value="50" step="1" />
+      <div class="live-bar">
+        <div class="live-fill" id="eye-left-live"></div>
+        <div class="threshold-marker" id="eye-left-threshold"></div>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <label>👁 Правый глаз <span class="sens-val" id="eye-right-val">50</span></label>
+      <input type="range" id="eye-right" min="0" max="100" value="50" step="1" />
+      <div class="live-bar">
+        <div class="live-fill" id="eye-right-live"></div>
+        <div class="threshold-marker" id="eye-right-threshold"></div>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <label>😛 Язык <span class="sens-val" id="tongue-val">50</span></label>
+      <input type="range" id="tongue" min="0" max="100" value="50" step="1" />
+      <div class="live-bar">
+        <div class="live-fill" id="tongue-live"></div>
+        <div class="threshold-marker" id="tongue-threshold"></div>
+      </div>
+    </div>
+
+    <div style="margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+      <button class="btn btn-secondary" id="settings-reset">Сбросить</button>
+      <button class="btn" id="settings-done">Готово</button>
+    </div>
+  </div>
+</div>
+
+<!-- Game Over -->
+<div class="overlay hidden" id="gameover-screen">
+  <div class="overlay-card">
+    <h2>Ты попался!</h2>
+    <p style="font-size: 20px; color: #fff; margin: 10px 0 4px;">Счёт: <b id="final-score">0</b></p>
+    <p style="margin-bottom: 18px;">Рекорд: <b id="final-high">0</b></p>
+    <div style="display: flex; flex-direction: column; gap: 10px; max-width: 280px; margin: 0 auto;">
+      <button class="btn" id="restart-btn">🔄 Ещё раз</button>
+      <button class="btn btn-menu" id="gameover-menu">🏠 В главное меню</button>
+      <button class="btn btn-secondary" id="gameover-settings" style="font-size: 15px; padding: 10px 24px;">⚙ Настройки</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+
+/* =============================================================
+   1. НАСТРОЙКИ
+   ============================================================= */
+const DEFAULT_SETTINGS = { eyeLeft: 50, eyeRight: 50, tongue: 50 };
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('faceRunnerSettings') || '{}');
+    return { ...DEFAULT_SETTINGS, ...saved };
+  } catch { return { ...DEFAULT_SETTINGS }; }
+}
+function saveSettings() {
+  localStorage.setItem('faceRunnerSettings', JSON.stringify(settings));
+}
+
+let settings = loadSettings();
+
+function eyeSensToThreshold(sens) {
+  // sens 0 → 0.9, sens 50 → 0.55, sens 100 → 0.2
+  return 0.55 + (50 - sens) / 100 * 0.7;
+}
+function jawSensToThreshold(sens) {
+  // sens 0 → 0.76, sens 50 → 0.42, sens 100 → 0.08
+  return 0.42 + (50 - sens) / 100 * 0.68;
+}
+function ratioThresholdForJaw(jawThresh) {
+  return 0.18 * (jawThresh / 0.42);
+}
+
+/* =============================================================
+   2. VISION
+   ============================================================= */
+const WASM_PATH  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
+
+async function initCamera(videoElement) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+    audio: false,
+  });
+  videoElement.srcObject = stream;
+  await videoElement.play();
+  return stream;
+}
+
+async function initFaceLandmarker() {
+  const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
+  return FaceLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'GPU' },
+    runningMode: 'VIDEO',
+    numFaces: 1,
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: false,
+  });
+}
+
+/* =============================================================
+   3. GESTURES
+   ============================================================= */
+const BLINK_COOLDOWN_MS = 280;
+const JUMP_COOLDOWN_MS  = 550;
+
+let lastLeftBlink = 0;
+let lastRightBlink = 0;
+let lastJump = 0;
+
+function detectGestures(blendshapes, landmarks, now) {
+  const get = (name) => blendshapes.find(c => c.categoryName === name)?.score ?? 0;
+
+  const leftEye  = get('eyeBlinkLeft');
+  const rightEye = get('eyeBlinkRight');
+  const jawOpen  = get('jawOpen');
+
+  const leftThresh  = eyeSensToThreshold(settings.eyeLeft);
+  const rightThresh = eyeSensToThreshold(settings.eyeRight);
+  const jawThresh   = jawSensToThreshold(settings.tongue);
+  const ratioThresh = ratioThresholdForJaw(jawThresh);
+
+  let leftBlink = false, rightBlink = false, jump = false;
+
+  const leftFiring  = leftEye  > leftThresh;
+  const rightFiring = rightEye > rightThresh;
+
+  if (leftFiring && !rightFiring && now - lastLeftBlink > BLINK_COOLDOWN_MS) {
+    leftBlink = true; lastLeftBlink = now;
+  } else if (rightFiring && !leftFiring && now - lastRightBlink > BLINK_COOLDOWN_MS) {
+    rightBlink = true; lastRightBlink = now;
+  }
+
+  if (jawOpen > jawThresh && landmarks && now - lastJump > JUMP_COOLDOWN_MS) {
+    const upper = landmarks[13];
+    const lower = landmarks[14];
+    const leftCorner  = landmarks[78];
+    const rightCorner = landmarks[308];
+    const mouthHeight = Math.abs(lower.y - upper.y);
+    const mouthWidth  = Math.abs(rightCorner.x - leftCorner.x);
+    const ratio = mouthWidth > 0 ? mouthHeight / mouthWidth : 0;
+    if (ratio > ratioThresh) {
+      jump = true; lastJump = now;
+    }
+  }
+
+  return { leftBlink, rightBlink, jump };
+}
+
+function resetGestureState() {
+  lastLeftBlink = 0; lastRightBlink = 0; lastJump = 0;
+}
+
+/* =============================================================
+   4. GAME
+   ============================================================= */
+const LANE_WIDTH = 2.2;
+const LANE_X = [-LANE_WIDTH, 0, LANE_WIDTH];
+const GROUND_Y = 0.9;
+const GRAVITY = -30;
+const JUMP_FORCE = 10;
+const START_SPEED = 12;
+const MAX_SPEED = 34;
+const SPEED_INCREASE_PER_SEC = 0.18;
+
+class Game {
+  constructor(container) {
+    this.container = container;
+
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x87ceeb);
+    this.scene.fog = new THREE.Fog(0x87ceeb, 35, 95);
+
+    this.camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 220);
+    this.camera.position.set(0, 5.2, 7.5);
+
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(this.renderer.domElement);
+
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.3);
+    dir.position.set(6, 18, 8);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(1024, 1024);
+    dir.shadow.camera.left = -15; dir.shadow.camera.right = 15;
+    dir.shadow.camera.top = 15;   dir.shadow.camera.bottom = -15;
+    dir.shadow.camera.far = 60;
+    this.scene.add(dir);
+
+    // Игрок
+    const pMat = new THREE.MeshStandardMaterial({ color: 0xff6b35, roughness: 0.5 });
+    this.player = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.9, 6, 12), pMat);
+    this.player.position.set(0, GROUND_Y, 0);
+    this.player.castShadow = true;
+    this.scene.add(this.player);
+
+    // Дорога
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 1 });
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(9, 400), roadMat);
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0, -190);
+    road.receiveShadow = true;
+    this.scene.add(road);
+
+    for (const x of [-LANE_WIDTH / 2, LANE_WIDTH / 2]) {
+      const line = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.1, 400),
+        new THREE.MeshBasicMaterial({ color: 0xf4d35e })
+      );
+      line.rotation.x = -Math.PI / 2;
+      line.position.set(x, 0.01, -190);
+      this.scene.add(line);
+    }
+
+    for (const x of [-5.2, 5.2]) {
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(0.4, 1.6, 400),
+        new THREE.MeshStandardMaterial({ color: 0x2255aa })
+      );
+      wall.position.set(x, 0.8, -190);
+      wall.receiveShadow = true;
+      this.scene.add(wall);
+    }
+
+    this.obstacles = [];
+    this.scenery = [];
+    this.obstacleTimer = 0;
+    this.obstacleInterval = 1.15;
+    this.sceneryTimer = 0;
+    this.sceneryInterval = 0.45;
+
+    this.playerLane = 1;
+    this.targetX = 0;
+    this.playerY = GROUND_Y;
+    this.velocityY = 0;
+    this.isJumping = false;
+
+    this.score = 0;
+    this.speed = START_SPEED;
+    this.isRunning = false;
+    this.isPaused = false;
+    this.isGameOver = false;
+    this.onGameOver = null;
+    this.onScoreUpdate = null;
+    this.highScore = Number(localStorage.getItem('faceRunnerHigh') || 0);
+
+    window.addEventListener('resize', () => this.onResize());
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  start()  { this.reset(); this.isRunning = true; }
+  pause()  { if (this.isRunning && !this.isGameOver) this.isPaused = true; }
+  resume() { this.isPaused = false; }
+  stop()   { this.isRunning = false; this.isPaused = false; }
+
+  reset() {
+    for (const o of this.obstacles) this.scene.remove(o.mesh);
+    for (const s of this.scenery) this.scene.remove(s);
+    this.obstacles = []; this.scenery = [];
+    this.playerLane = 1; this.targetX = 0;
+    this.player.position.set(0, GROUND_Y, 0);
+    this.playerY = GROUND_Y; this.velocityY = 0; this.isJumping = false;
+    this.score = 0; this.speed = START_SPEED;
+    this.obstacleTimer = 0; this.isGameOver = false; this.isPaused = false;
+    if (this.onScoreUpdate) this.onScoreUpdate(0, this.highScore);
+  }
+
+  moveLeft()  { if (this.isRunning && !this.isPaused && this.playerLane > 0) { this.playerLane--; this.targetX = LANE_X[this.playerLane]; } }
+  moveRight() { if (this.isRunning && !this.isPaused && this.playerLane < 2) { this.playerLane++; this.targetX = LANE_X[this.playerLane]; } }
+  jump() {
+    if (!this.isRunning || this.isPaused || this.isJumping) return;
+    this.isJumping = true; this.velocityY = JUMP_FORCE;
+  }
+
+  update(dt) {
+    if (!this.isRunning || this.isPaused) {
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    dt = Math.min(dt, 0.05);
+    this.speed = Math.min(MAX_SPEED, this.speed + SPEED_INCREASE_PER_SEC * dt);
+    const prevScore = Math.floor(this.score);
+    this.score += this.speed * dt * 2;
+
+    const dx = this.targetX - this.player.position.x;
+    this.player.position.x += dx * Math.min(1, dt * 13);
+
+    if (this.isJumping) {
+      this.velocityY += GRAVITY * dt;
+      this.playerY += this.velocityY * dt;
+      if (this.playerY <= GROUND_Y) {
+        this.playerY = GROUND_Y; this.velocityY = 0; this.isJumping = false;
+      }
+    }
+    this.player.position.y = this.playerY;
+    this.player.rotation.z = -dx * 0.25;
+
+    this.camera.position.x += (this.player.position.x * 0.55 - this.camera.position.x) * Math.min(1, dt * 5);
+    this.camera.lookAt(this.player.position.x * 0.25, 1.6, -10);
+
+    this.obstacleTimer += dt;
+    if (this.obstacleTimer >= this.obstacleInterval) { this.obstacleTimer = 0; this.spawnObstacle(); }
+
+    for (let i = this.obstacles.length - 1; i >= 0; i--) {
+      const o = this.obstacles[i];
+      o.mesh.position.z += this.speed * dt;
+
+      if (!o.passed) {
+        const zDist = Math.abs(o.mesh.position.z);
+        const xDist = Math.abs(o.mesh.position.x - this.player.position.x);
+        if (xDist < 0.85 && zDist < 0.9) {
+          if (o.type === 'tall') { this.gameOver(); return; }
+          const playerBottom = this.playerY - 0.8;
+          if (playerBottom < o.topY) { this.gameOver(); return; }
+        }
+        if (o.mesh.position.z > 2) o.passed = true;
+      }
+
+      if (o.mesh.position.z > 14) {
+        this.scene.remove(o.mesh);
+        this.obstacles.splice(i, 1);
+      }
+    }
+
+    this.sceneryTimer += dt;
+    if (this.sceneryTimer >= this.sceneryInterval) { this.sceneryTimer = 0; this.spawnScenery(); }
+    for (let i = this.scenery.length - 1; i >= 0; i--) {
+      const s = this.scenery[i];
+      s.position.z += this.speed * dt;
+      if (s.position.z > 14) { this.scene.remove(s); this.scenery.splice(i, 1); }
+    }
+
+    const newScore = Math.floor(this.score);
+    if (newScore !== prevScore && this.onScoreUpdate) this.onScoreUpdate(newScore, this.highScore);
+
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  spawnObstacle() {
+    const lane = Math.floor(Math.random() * 3);
+    const x = LANE_X[lane];
+    const isTall = Math.random() < 0.55;
+    let mesh, topY;
+    if (isTall) {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.1, 2.6, 1.1),
+        new THREE.MeshStandardMaterial({ color: 0x3366cc })
+      );
+      mesh.position.set(x, 1.3, -110); topY = 2.6;
+    } else {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 1.0, 1.2),
+        new THREE.MeshStandardMaterial({ color: 0xcc3344 })
+      );
+      mesh.position.set(x, 0.5, -110); topY = 1.0;
+    }
+    mesh.castShadow = true;
+    this.scene.add(mesh);
+    this.obstacles.push({ mesh, type: isTall ? 'tall' : 'low', topY, passed: false });
+  }
+
+  spawnScenery() {
+    for (const side of [-1, 1]) {
+      const height = 2 + Math.random() * 2;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, height, 0.7),
+        new THREE.MeshStandardMaterial({ color: side === -1 ? 0x2f8f5b : 0x6b4fbb })
+      );
+      mesh.position.set(side * (6.5 + Math.random() * 1.2), height / 2, -110);
+      mesh.castShadow = true;
+      this.scene.add(mesh);
+      this.scenery.push(mesh);
+    }
+  }
+
+  gameOver() {
+    this.isRunning = false;
+    this.isGameOver = true;
+    const final = Math.floor(this.score);
+    if (final > this.highScore) {
+      this.highScore = final;
+      localStorage.setItem('faceRunnerHigh', String(this.highScore));
+    }
+    if (this.onGameOver) this.onGameOver(final, this.highScore);
+  }
+
+  onResize() {
+    this.camera.aspect = innerWidth / innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(innerWidth, innerHeight);
+  }
+}
+
+/* =============================================================
+   5. MAIN
+   ============================================================= */
+const video          = document.getElementById('input-video');
+const container      = document.getElementById('game-container');
+const cameraPreview  = document.getElementById('camera-preview');
+const faceStatus     = document.getElementById('face-status');
+const scoreEl        = document.getElementById('score');
+const highEl         = document.getElementById('high-score');
+const startScreen    = document.getElementById('start-screen');
+const startBtn       = document.getElementById('start-btn');
+const startError     = document.getElementById('start-error');
+const settingsBtn    = document.getElementById('settings-btn');
+const settingsScreen = document.getElementById('settings-screen');
+const settingsDone   = document.getElementById('settings-done');
+const settingsReset  = document.getElementById('settings-reset');
+const gameoverScreen = document.getElementById('gameover-screen');
+const finalScoreEl   = document.getElementById('final-score');
+const finalHighEl    = document.getElementById('final-high');
+const restartBtn     = document.getElementById('restart-btn');
+const pauseBtn       = document.getElementById('pause-btn');
+const pauseScreen    = document.getElementById('pause-screen');
+const pauseScoreEl   = document.getElementById('pause-score');
+const pauseResume    = document.getElementById('pause-resume');
+const pauseSettings  = document.getElementById('pause-settings');
+const pauseMenuBtn   = document.getElementById('pause-menu');
+const gameoverSettings = document.getElementById('gameover-settings');
+const gameoverMenuBtn  = document.getElementById('gameover-menu');
+
+let faceLandmarker = null;
+let ready = false;
+let lastVideoTime = -1;
+let gestureFlashTimer = 0;
+
+let gameState = 'menu';          // 'menu' | 'playing' | 'paused' | 'gameover'
+let settingsReturnTo = 'menu';   // 'menu' | 'pause' | 'gameover'
+
+// --- Игра ---
+const game = new Game(container);
+game.onScoreUpdate = (score, high) => {
+  scoreEl.textContent = score;
+  highEl.textContent = `Рекорд: ${high}`;
+};
+game.onGameOver = (score, high) => {
+  finalScoreEl.textContent = score;
+  finalHighEl.textContent = high;
+  gameoverScreen.classList.remove('hidden');
+  pauseBtn.classList.add('hidden');
+  gameState = 'gameover';
+};
+highEl.textContent = `Рекорд: ${game.highScore}`;
+
+// --- Настройки: DOM ---
+const sliders = {
+  eyeLeft:  document.getElementById('eye-left'),
+  eyeRight: document.getElementById('eye-right'),
+  tongue:   document.getElementById('tongue'),
+};
+const sliderLabels = {
+  eyeLeft:  document.getElementById('eye-left-val'),
+  eyeRight: document.getElementById('eye-right-val'),
+  tongue:   document.getElementById('tongue-val'),
+};
+const thresholdMarkers = {
+  eyeLeft:  document.getElementById('eye-left-threshold'),
+  eyeRight: document.getElementById('eye-right-threshold'),
+  tongue:   document.getElementById('tongue-threshold'),
+};
+const liveBars = {
+  eyeLeft:  document.getElementById('eye-left-live'),
+  eyeRight: document.getElementById('eye-right-live'),
+  tongue:   document.getElementById('tongue-live'),
+};
+
+function updateThresholdMarkers() {
+  const eL = eyeSensToThreshold(settings.eyeLeft);
+  const eR = eyeSensToThreshold(settings.eyeRight);
+  const jw = jawSensToThreshold(settings.tongue);
+  thresholdMarkers.eyeLeft.style.left  = (eL * 100) + '%';
+  thresholdMarkers.eyeRight.style.left = (eR * 100) + '%';
+  thresholdMarkers.tongue.style.left   = (jw * 100) + '%';
+}
+
+function syncSettingsUI() {
+  for (const key of ['eyeLeft', 'eyeRight', 'tongue']) {
+    sliders[key].value = settings[key];
+    sliderLabels[key].textContent = settings[key];
+  }
+  updateThresholdMarkers();
+}
+
+for (const key of ['eyeLeft', 'eyeRight', 'tongue']) {
+  sliders[key].addEventListener('input', (e) => {
+    settings[key] = Number(e.target.value);
+    sliderLabels[key].textContent = settings[key];
+    updateThresholdMarkers();
+    saveSettings();
+  });
+}
+
+settingsReset.addEventListener('click', () => {
+  settings = { ...DEFAULT_SETTINGS };
+  syncSettingsUI();
+  saveSettings();
+});
+
+// --- Камера + модель ---
+async function ensureCameraAndModel() {
+  if (!video.srcObject) await initCamera(video);
+  if (!faceLandmarker) faceLandmarker = await initFaceLandmarker();
+  ready = true;
+}
+
+// --- Переходы состояний ---
+function showStartScreen() {
+  startScreen.classList.remove('hidden');
+  pauseScreen.classList.add('hidden');
+  settingsScreen.classList.add('hidden');
+  gameoverScreen.classList.add('hidden');
+  pauseBtn.classList.add('hidden');
+  game.stop();
+  gameState = 'menu';
+}
+
+function startGame() {
+  startScreen.classList.add('hidden');
+  pauseScreen.classList.add('hidden');
+  settingsScreen.classList.add('hidden');
+  gameoverScreen.classList.add('hidden');
+  pauseBtn.classList.remove('hidden');
+  resetGestureState();
+  game.start();
+  gameState = 'playing';
+}
+
+function pauseGame() {
+  if (gameState !== 'playing') return;
+  game.pause();
+  pauseScoreEl.textContent = Math.floor(game.score);
+  pauseScreen.classList.remove('hidden');
+  pauseBtn.classList.add('hidden');
+  gameState = 'paused';
+}
+
+function resumeGame() {
+  if (gameState !== 'paused') return;
+  game.resume();
+  pauseScreen.classList.add('hidden');
+  pauseBtn.classList.remove('hidden');
+  gameState = 'playing';
+}
+
+async function openSettings(from) {
+  settingsReturnTo = from;
+  startError.textContent = '';
+  try {
+    await ensureCameraAndModel();
+  } catch (err) {
+    console.error(err);
+    startError.textContent = 'Не удалось получить доступ к камере. Разрешите доступ.';
+    return;
+  }
+  if (from === 'menu') {
+    startScreen.classList.add('hidden');
+  } else if (from === 'pause') {
+    pauseScreen.classList.add('hidden');
+    pauseBtn.classList.add('hidden');
+  } else if (from === 'gameover') {
+    gameoverScreen.classList.add('hidden');
+  }
+  syncSettingsUI();
+  settingsScreen.classList.remove('hidden');
+}
+
+function closeSettings() {
+  settingsScreen.classList.add('hidden');
+  if (settingsReturnTo === 'menu') {
+    startScreen.classList.remove('hidden');
+    gameState = 'menu';
+  } else if (settingsReturnTo === 'pause') {
+    pauseScreen.classList.remove('hidden');
+    gameState = 'paused';
+  } else if (settingsReturnTo === 'gameover') {
+    gameoverScreen.classList.remove('hidden');
+    gameState = 'gameover';
+  }
+}
+
+// --- Кнопки ---
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  const orig = startBtn.textContent;
+  startBtn.textContent = 'Загрузка…';
+  startError.textContent = '';
+  try {
+    await ensureCameraAndModel();
+    startGame();
+  } catch (err) {
+    console.error(err);
+    startError.textContent = 'Не удалось получить доступ к камере. Разрешите доступ и попробуйте снова.';
+  } finally {
+    startBtn.disabled = false;
+    startBtn.textContent = orig;
+  }
+});
+
+settingsBtn.addEventListener('click', () => openSettings('menu'));
+settingsDone.addEventListener('click', closeSettings);
+
+restartBtn.addEventListener('click', () => {
+  gameoverScreen.classList.add('hidden');
+  startGame();
+});
+
+pauseBtn.addEventListener('click', pauseGame);
+pauseResume.addEventListener('click', resumeGame);
+pauseSettings.addEventListener('click', () => openSettings('pause'));
+pauseMenuBtn.addEventListener('click', () => {
+  pauseScreen.classList.add('hidden');
+  showStartScreen();
+});
+
+gameoverSettings.addEventListener('click', () => openSettings('gameover'));
+gameoverMenuBtn.addEventListener('click', () => {
+  gameoverScreen.classList.add('hidden');
+  showStartScreen();
+});
+
+// --- Esc ---
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (gameState === 'playing') pauseGame();
+  else if (gameState === 'paused') resumeGame();
+  else if (gameState === 'gameover') showStartScreen();
+});
+
+// --- Live-индикация в настройках ---
+function updateLiveBars(blendshapes) {
+  if (!blendshapes || settingsScreen.classList.contains('hidden')) return;
+  const get = (name) => blendshapes.find(c => c.categoryName === name)?.score ?? 0;
+
+  const leftVal  = get('eyeBlinkLeft');
+  const rightVal = get('eyeBlinkRight');
+  const jawVal   = get('jawOpen');
+
+  const leftThresh  = eyeSensToThreshold(settings.eyeLeft);
+  const rightThresh = eyeSensToThreshold(settings.eyeRight);
+  const jawThresh   = jawSensToThreshold(settings.tongue);
+
+  liveBars.eyeLeft.style.width  = (leftVal * 100) + '%';
+  liveBars.eyeRight.style.width = (rightVal * 100) + '%';
+  liveBars.tongue.style.width   = (jawVal * 100) + '%';
+
+  liveBars.eyeLeft.classList.toggle('triggered',  leftVal  > leftThresh);
+  liveBars.eyeRight.classList.toggle('triggered', rightVal > rightThresh);
+  liveBars.tongue.classList.toggle('triggered',   jawVal   > jawThresh);
+}
+
+// --- Главный цикл ---
+let lastFrame = performance.now();
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = (now - lastFrame) / 1000;
+  lastFrame = now;
+
+  if (ready && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+
+    let results = null;
+    try { results = faceLandmarker.detectForVideo(video, now); } catch (e) {}
+
+    const landmarks   = results?.faceLandmarks?.[0];
+    const blendshapes = results?.faceBlendshapes?.[0]?.categories;
+
+    if (landmarks && blendshapes) {
+      cameraPreview.classList.add('active');
+      faceStatus.textContent = 'лицо найдено';
+      updateLiveBars(blendshapes);
+
+      if (gameState === 'playing') {
+        const { leftBlink, rightBlink, jump } = detectGestures(blendshapes, landmarks, now);
+        if (leftBlink)  { game.moveLeft();  flashGesture(); }
+        if (rightBlink) { game.moveRight(); flashGesture(); }
+        if (jump)       { game.jump();      flashGesture(); }
+      }
+    } else {
+      cameraPreview.classList.remove('active');
+      faceStatus.textContent = 'нет лица';
+    }
+  }
+
+  if (gestureFlashTimer > 0) {
+    gestureFlashTimer -= dt;
+    if (gestureFlashTimer <= 0) cameraPreview.classList.remove('gesture');
+  }
+
+  game.update(dt);
+}
+
+function flashGesture() {
+  cameraPreview.classList.add('gesture');
+  gestureFlashTimer = 0.2;
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
